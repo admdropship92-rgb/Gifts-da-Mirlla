@@ -1,12 +1,19 @@
 import React, { useState } from 'react';
-import { ProdutoConfig, SimuladorConfig } from '../types';
-import { ResumoFinanceiro, calcularCustoPedido } from '../utils/calculations';
+import { FaixaDesconto, ProdutoConfig, SimuladorConfig } from '../types';
+import {
+  ResumoFinanceiro,
+  calcularCustoPedido,
+  precoComDesconto,
+  descontoMaximoSeguro,
+  obterDescontoParaQuantidade,
+} from '../utils/calculations';
 import {
   formatBRL,
   formatBRLPreciso,
   formatPercent,
   parseNumeroSeguro,
 } from '../utils/formatters';
+import { FAIXAS_DESCONTO_PADRAO } from '../utils/storage';
 import {
   TrendingUp,
   TrendingDown,
@@ -17,6 +24,12 @@ import {
   Calculator,
   Percent,
   Gift,
+  Plus,
+  Trash2,
+  Tag,
+  ShieldCheck,
+  AlertCircle,
+  ArrowRight,
 } from 'lucide-react';
 
 interface LucroTabProps {
@@ -79,14 +92,130 @@ export const LucroTab: React.FC<LucroTabProps> = ({
     });
   };
 
-  // Cálculo da quantidade simulada usando a fórmula solicitada pelo usuário:
+  // Faixas e margens de desconto
+  const faixasDesconto: FaixaDesconto[] =
+    Array.isArray(produto.faixasDesconto) && produto.faixasDesconto.length > 0
+      ? produto.faixasDesconto
+      : FAIXAS_DESCONTO_PADRAO;
+  const margemMinima = produto.margemMinima ?? 20;
+  const margemDesejada = produto.margemDesejada ?? 40;
+
+  // Alteração da margem mínima
+  const handleMargemMinimaChange = (val: string) => {
+    const num = Math.max(0, Math.min(99, parseNumeroSeguro(val)));
+    onAtualizarProduto({
+      ...produto,
+      margemMinima: num,
+    });
+  };
+
+  // Alteração de uma faixa de desconto
+  const handleAlterarFaixa = (
+    index: number,
+    campo: 'qtdMinima' | 'descontoPercent',
+    valor: number
+  ) => {
+    const novas = faixasDesconto.map((f, i) => {
+      if (i !== index) return f;
+      return {
+        ...f,
+        [campo]: Math.max(0, Number(valor) || 0),
+      };
+    });
+    onAtualizarProduto({
+      ...produto,
+      faixasDesconto: novas,
+    });
+  };
+
+  // Adicionar nova faixa
+  const handleAdicionarFaixa = () => {
+    const ultima = faixasDesconto[faixasDesconto.length - 1];
+    const proximaQtd = ultima ? ultima.qtdMinima + 10 : 10;
+    const proximoDesc = ultima ? Math.min(60, ultima.descontoPercent + 5) : 10;
+    const novas = [...faixasDesconto, { qtdMinima: proximaQtd, descontoPercent: proximoDesc }];
+    novas.sort((a, b) => a.qtdMinima - b.qtdMinima);
+    onAtualizarProduto({
+      ...produto,
+      faixasDesconto: novas,
+    });
+  };
+
+  // Remover faixa
+  const handleRemoverFaixa = (index: number) => {
+    if (faixasDesconto.length <= 1) return;
+    const novas = faixasDesconto.filter((_, i) => i !== index);
+    onAtualizarProduto({
+      ...produto,
+      faixasDesconto: novas,
+    });
+  };
+
+  // Sugerir descontos seguros (múltiplos de 5% arredondados para baixo)
+  const handleSugerirDescontosSeguros = () => {
+    const novas = faixasDesconto.map((f) => {
+      if (f.qtdMinima <= 1) {
+        return { ...f, descontoPercent: 0 };
+      }
+      const descMaxSem = descontoMaximoSeguro(resumo, f.qtdMinima, false, margemMinima);
+      const descMaxPres = descontoMaximoSeguro(resumo, f.qtdMinima, true, margemMinima);
+      const descMaxSeguro = Math.min(descMaxSem, descMaxPres);
+      const sugerido = Math.max(0, Math.floor(descMaxSeguro / 5) * 5);
+      return {
+        ...f,
+        descontoPercent: sugerido,
+      };
+    });
+    onAtualizarProduto({
+      ...produto,
+      faixasDesconto: novas,
+    });
+  };
+
+  // Semáforo de margem
+  const renderSemaforo = (margem: number) => {
+    if (margem >= margemDesejada) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-[#EAF5EF] text-[#07402A] border border-[#0F5C3C]/20">
+          <span className="w-2 h-2 rounded-full bg-[#0F5C3C]"></span>
+          <span>{formatPercent(margem)}</span>
+        </span>
+      );
+    }
+    if (margem >= margemMinima) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-50 text-amber-900 border border-amber-200">
+          <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+          <span>{formatPercent(margem)}</span>
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-extrabold bg-rose-50 text-rose-700 border border-rose-200 animate-pulse">
+        <span className="w-2 h-2 rounded-full bg-rose-600"></span>
+        <span>Desconto alto demais ({formatPercent(margem)})</span>
+      </span>
+    );
+  };
+
+  // Cálculo da quantidade simulada com desconto automático da faixa:
   const qtdLote = simulador.quantidadeVenda || 1;
   const ehPresente = Boolean(simulador.ehPresente);
-  const simulacaoLote = calcularCustoPedido(resumo, qtdLote, undefined, ehPresente);
+  const descontoLotePercent = obterDescontoParaQuantidade(faixasDesconto, qtdLote);
+  const precoUnitarioComDesconto = precoComDesconto(produto.precoVenda, descontoLotePercent);
+
+  // Simulação com o desconto aplicado
+  const simulacaoLote = calcularCustoPedido(resumo, qtdLote, precoUnitarioComDesconto, ehPresente);
+
+  // Valores comparativos de desconto
+  const faturamentoSemDesconto = produto.precoVenda * qtdLote;
+  const faturamentoComDesconto = simulacaoLote.faturamento;
+  const quantoDeixouDeGanhar = Math.max(0, faturamentoSemDesconto - faturamentoComDesconto);
 
   // Faixas para Tabela "Custo por Quantidade" (1 a 10 ímãs conforme solicitado)
   const [modoTabela, setModoTabela] = useState<'1a10' | 'lotes'>('1a10');
   const [colunasTabela, setColunasTabela] = useState<'comparativo' | 'sem_presente' | 'presente'>('comparativo');
+  const [modoVisualizacaoFaixas, setModoVisualizacaoFaixas] = useState<'comparativo' | 'sem_presente' | 'presente'>('comparativo');
   const faixas1a10 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
   const faixasGrandes = [1, 5, 10, 15, 20, 30, 50, 100];
   const faixasTabela = modoTabela === '1a10' ? faixas1a10 : faixasGrandes;
@@ -327,69 +456,511 @@ export const LucroTab: React.FC<LucroTabProps> = ({
           </div>
         </div>
 
-        {/* 4 Cards de Resultado do Lote */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          {/* Faturamento Bruto */}
-          <div className="bg-[#FBF7F1] p-4 rounded-2xl border border-[#0F5C3C]/15">
-            <span className="text-[10px] font-bold text-[#07402A]/70 uppercase tracking-wider block">
-              Faturamento Bruto
+        {/* Banner de Desconto por Quantidade Aplicado na Encomenda */}
+        {descontoLotePercent > 0 ? (
+          <div className="p-3.5 rounded-2xl bg-[#EAF5EF] border border-[#0F5C3C]/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="p-2 rounded-xl bg-[#07402A] text-white shrink-0">
+                <Tag className="h-4 w-4 text-[#F59BC1]" />
+              </span>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-[#07402A]">
+                    Desconto por Quantidade: <span className="text-[#0F5C3C] font-extrabold">{descontoLotePercent}% OFF aplicado</span>
+                  </span>
+                  <span className="text-[10px] font-bold bg-[#07402A] text-[#FBF7F1] px-2 py-0.5 rounded-full font-mono-numbers">
+                    {formatBRLPreciso(precoUnitarioComDesconto)} / ímã
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#07402A]/75 mt-0.5">
+                  Faixa de {qtdLote} ímãs · Preço cheio era {formatBRL(produto.precoVenda)}/ímã (economia total de {formatBRL(quantoDeixouDeGanhar)} no pedido)
+                </p>
+              </div>
+            </div>
+            <div className="text-left sm:text-right shrink-0">
+              <span className="text-[10px] uppercase font-bold text-[#07402A]/70 block">Desconto Concedido</span>
+              <span className="text-sm font-mono-numbers font-black text-[#0F5C3C] bg-white px-2.5 py-1 rounded-xl border border-[#0F5C3C]/20 inline-block">
+                - {formatBRL(quantoDeixouDeGanhar)}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="p-3 rounded-2xl bg-[#FBF7F1] border border-[#0F5C3C]/15 flex items-center justify-between gap-2 text-xs text-[#07402A]/75">
+            <span className="flex items-center gap-2">
+              <Tag className="h-4 w-4 text-[#07402A]/60" />
+              Volume avulso sem desconto por quantidade (preço de tabela normal: <strong>{formatBRL(produto.precoVenda)}/ímã</strong>)
             </span>
-            <span className="text-xl sm:text-2xl font-black text-[#07402A] font-mono-numbers block mt-1">
-              {formatBRL(simulacaoLote.faturamento)}
+            <span className="text-[11px] font-bold text-[#07402A] bg-white px-2 py-0.5 rounded-lg border border-[#0F5C3C]/15">
+              0% de desconto
             </span>
-            <span className="text-[11px] text-[#07402A]/70 font-mono-numbers">
+          </div>
+        )}
+
+        {/* 5 Cards de Resultado: Faturamento sem desconto, c/ desconto, quanto deixou de ganhar, custo do pedido e lucro líquido */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {/* 1. Faturamento sem desconto */}
+          <div className="bg-[#FBF7F1] p-3.5 rounded-2xl border border-[#0F5C3C]/15 font-mono-numbers">
+            <span className="text-[10px] font-bold text-[#07402A]/70 uppercase tracking-wider block font-sans">
+              Faturamento sem Desconto
+            </span>
+            <span className="text-lg sm:text-xl font-black text-[#07402A] block mt-1">
+              {formatBRL(faturamentoSemDesconto)}
+            </span>
+            <span className="text-[11px] text-[#07402A]/70 block font-sans mt-0.5">
               {qtdLote} un × {formatBRL(produto.precoVenda)}
             </span>
           </div>
 
-          {/* Custo Total do Pedido */}
-          <div className="bg-[#FBF7F1] p-4 rounded-2xl border border-[#0F5C3C]/15">
-            <span className="text-[10px] font-bold text-[#07402A]/70 uppercase tracking-wider block">
+          {/* 2. Faturamento com desconto */}
+          <div className="bg-[#FBF7F1] p-3.5 rounded-2xl border border-[#0F5C3C]/15 font-mono-numbers">
+            <span className="text-[10px] font-bold text-[#07402A]/70 uppercase tracking-wider block font-sans">
+              Faturamento c/ Desconto
+            </span>
+            <span className="text-lg sm:text-xl font-black text-[#07402A] block mt-1">
+              {formatBRL(faturamentoComDesconto)}
+            </span>
+            <span className="text-[11px] text-[#0F5C3C] font-semibold block font-sans mt-0.5">
+              {descontoLotePercent > 0 ? `${descontoLotePercent}% OFF aplicado` : 'Sem desconto'}
+            </span>
+          </div>
+
+          {/* 3. Quanto deixou de ganhar */}
+          <div className="bg-[#FBF7F1] p-3.5 rounded-2xl border border-[#0F5C3C]/15 font-mono-numbers">
+            <span className="text-[10px] font-bold text-[#07402A]/70 uppercase tracking-wider block font-sans">
+              Quanto Deixou de Ganhar
+            </span>
+            <span
+              className={`text-lg sm:text-xl font-black block mt-1 ${
+                quantoDeixouDeGanhar > 0 ? 'text-[#0F5C3C]' : 'text-[#07402A]'
+              }`}
+            >
+              {formatBRL(quantoDeixouDeGanhar)}
+            </span>
+            <span className="text-[11px] text-[#07402A]/70 block font-sans mt-0.5">
+              {quantoDeixouDeGanhar > 0 ? 'Economia do cliente' : 'Nenhum desconto'}
+            </span>
+          </div>
+
+          {/* 4. Custo do Pedido */}
+          <div className="bg-[#FBF7F1] p-3.5 rounded-2xl border border-[#0F5C3C]/15 font-mono-numbers">
+            <span className="text-[10px] font-bold text-[#07402A]/70 uppercase tracking-wider block font-sans">
               Custo Total do Pedido
             </span>
-            <span className="text-xl sm:text-2xl font-black text-[#07402A] font-mono-numbers block mt-1">
+            <span className="text-lg sm:text-xl font-black text-[#07402A] block mt-1">
               {formatBRL(simulacaoLote.custoTotal)}
             </span>
-            <span className="text-[11px] text-[#07402A]/70 font-mono-numbers">
-              Insumos: {formatBRL(simulacaoLote.custoInsumos)}
+            <span className="text-[11px] text-[#07402A]/70 block font-sans mt-0.5">
+              Insumos: {formatBRLPreciso(simulacaoLote.custoInsumos)}
             </span>
           </div>
 
-          {/* Custo Médio por Ímã (Destaque da Diluição) */}
-          <div className="bg-[#FCE4EE]/70 p-4 rounded-2xl border border-[#F59BC1]/60">
-            <span className="text-[10px] font-bold text-[#07402A] uppercase tracking-wider block">
-              Custo Médio / Ímã
-            </span>
-            <span className="text-xl sm:text-2xl font-black text-[#07402A] font-mono-numbers block mt-1">
-              {formatBRLPreciso(simulacaoLote.custoMedioPorIma)}
-            </span>
-            <span className="text-[11px] text-[#07402A]/80 font-medium block">
-              {qtdLote === 1
-                ? simulacaoLote.levaCaixa
-                  ? 'Base presente: R$ 9,27'
-                  : 'Base sem presente: R$ 7,03'
-                : `Custo médio do pedido de ${qtdLote} ímãs`}
-            </span>
-          </div>
-
-          {/* Lucro Líquido Total */}
+          {/* 5. Lucro Líquido Final */}
           <div
-            className={`p-4 rounded-2xl border ${
+            className={`p-3.5 rounded-2xl border font-mono-numbers col-span-2 sm:col-span-1 ${
               simulacaoLote.estaNoLucro
                 ? 'bg-[#EAF5EF] border-[#0F5C3C]/30 text-[#07402A]'
                 : 'bg-[#FFF1F2] border-rose-200 text-rose-950'
             }`}
           >
-            <span className="text-[10px] font-bold uppercase tracking-wider block">
-              Lucro no Bolso
+            <span className="text-[10px] font-bold uppercase tracking-wider block font-sans">
+              Lucro Líquido Final
             </span>
-            <span className="text-xl sm:text-2xl font-black font-mono-numbers block mt-1">
+            <span className="text-lg sm:text-xl font-black block mt-1">
               {formatBRL(simulacaoLote.lucroTotal)}
             </span>
-            <span className="text-[11px] font-bold opacity-90 font-mono-numbers">
-              Margem: {formatPercent(simulacaoLote.margemPercent)}
-            </span>
+            <div className="mt-1 font-sans">
+              {renderSemaforo(simulacaoLote.margemPercent)}
+            </div>
           </div>
+        </div>
+      </div>
+
+      {/* Bloco Intermediário: DESCONTO POR QUANTIDADE & TRAVA DE MARGEM */}
+      <div className="bg-white rounded-3xl p-5 sm:p-6 border border-[#0F5C3C]/15 shadow-xs space-y-4">
+        {/* Cabeçalho do Bloco */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Tag className="h-5 w-5 text-[#07402A]" />
+              <h3 className="text-base font-bold text-[#07402A]">
+                Desconto por Quantidade
+              </h3>
+              <span className="text-[10px] font-bold bg-[#F59BC1]/30 text-[#07402A] px-2.5 py-0.5 rounded-full border border-[#F59BC1]/60">
+                Automático no Simulador
+              </span>
+            </div>
+            <p className="text-xs text-[#07402A]/70 mt-0.5">
+              Defina as faixas de desconto progressivo por quantidade com cálculo de margem e trava de segurança.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handleSugerirDescontosSeguros}
+              className="px-3.5 py-2 bg-[#07402A] hover:bg-[#0F5C3C] text-[#FBF7F1] text-xs font-bold rounded-xl transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+              title="Preenche cada faixa com o maior desconto que garante a margem mínima"
+            >
+              <ShieldCheck className="h-4 w-4 text-[#F59BC1]" />
+              <span>Sugerir descontos seguros</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleAdicionarFaixa}
+              className="px-3 py-2 bg-white hover:bg-[#FBF7F1] text-[#07402A] border border-[#0F5C3C]/30 text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+            >
+              <Plus className="h-4 w-4 text-[#0F5C3C]" />
+              <span>Adicionar faixa</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Barra de Configuração da Margem Mínima e Modos de Visualização */}
+        <div className="p-4 rounded-2xl bg-[#FBF7F1] border border-[#0F5C3C]/15 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          {/* Campo Margem mínima que aceito (%) */}
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-[#FCE4EE] text-[#07402A] flex items-center justify-center shrink-0 border border-[#F59BC1]/40">
+              <Percent className="h-5 w-5" />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-[#07402A]">
+                Margem mínima que aceito (%)
+              </label>
+              <span className="text-[11px] text-[#07402A]/70 block">
+                Trava de segurança: alertas vermelhos surgem se o desconto fizer a margem cair abaixo disso
+              </span>
+            </div>
+            <div className="relative w-24 shrink-0">
+              <input
+                type="number"
+                min="0"
+                max="90"
+                step="1"
+                value={margemMinima}
+                onChange={(e) => handleMargemMinimaChange(e.target.value)}
+                className="w-full px-3 py-1.5 pr-7 bg-white border-2 border-[#0F5C3C]/30 rounded-xl text-sm font-mono-numbers font-black text-center text-[#07402A] focus:ring-2 focus:ring-[#F59BC1] focus:outline-hidden"
+              />
+              <span className="absolute right-2.5 top-2 text-xs font-bold text-[#07402A]/60">
+                %
+              </span>
+            </div>
+          </div>
+
+          {/* Seletor de Modo de Exibição */}
+          <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-[#0F5C3C]/20 self-start md:self-auto shrink-0">
+            <button
+              type="button"
+              onClick={() => setModoVisualizacaoFaixas('comparativo')}
+              className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                modoVisualizacaoFaixas === 'comparativo'
+                  ? 'bg-[#07402A] text-[#FBF7F1] shadow-2xs'
+                  : 'text-[#07402A] hover:bg-[#FCE4EE]'
+              }`}
+            >
+              Comparativo
+            </button>
+            <button
+              type="button"
+              onClick={() => setModoVisualizacaoFaixas('sem_presente')}
+              className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                modoVisualizacaoFaixas === 'sem_presente'
+                  ? 'bg-[#07402A] text-[#FBF7F1] shadow-2xs'
+                  : 'text-[#07402A] hover:bg-[#FCE4EE]'
+              }`}
+            >
+              Sem Presente
+            </button>
+            <button
+              type="button"
+              onClick={() => setModoVisualizacaoFaixas('presente')}
+              className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                modoVisualizacaoFaixas === 'presente'
+                  ? 'bg-[#07402A] text-[#FBF7F1] shadow-2xs'
+                  : 'text-[#07402A] hover:bg-[#FCE4EE]'
+              }`}
+            >
+              🎁 Presente
+            </button>
+          </div>
+        </div>
+
+        {/* Tabela Editável de Faixas de Desconto */}
+        <div className="overflow-x-auto">
+          {modoVisualizacaoFaixas === 'comparativo' ? (
+            <table className="w-full text-left text-xs font-mono-numbers border-collapse min-w-[760px]">
+              <thead>
+                <tr className="bg-[#FBF7F1] text-[#07402A] border-b border-[#0F5C3C]/20 text-[11px]">
+                  <th rowSpan={2} className="py-2.5 px-3 font-bold border-r border-[#0F5C3C]/15">
+                    Faixa (Qtd Mínima)
+                  </th>
+                  <th rowSpan={2} className="py-2.5 px-2.5 font-bold border-r border-[#0F5C3C]/15">
+                    Desconto (%)
+                  </th>
+                  <th rowSpan={2} className="py-2.5 px-2.5 font-bold border-r border-[#0F5C3C]/15">
+                    Preço Unitário
+                  </th>
+                  <th colSpan={4} className="py-2 px-3 font-bold text-center border-r border-[#0F5C3C]/20 bg-[#FBF7F1]">
+                    SEM PRESENTE
+                  </th>
+                  <th colSpan={4} className="py-2 px-3 font-bold text-center bg-[#FCE4EE]/60 text-[#07402A]">
+                    🎁 PRESENTE (Com Caixa & Seda)
+                  </th>
+                  <th rowSpan={2} className="py-2.5 px-2 font-bold text-center">
+                    Ações
+                  </th>
+                </tr>
+                <tr className="bg-[#FBF7F1] text-[#07402A] border-b border-[#0F5C3C]/15 text-[11px]">
+                  <th className="py-1.5 px-2 font-bold">Total</th>
+                  <th className="py-1.5 px-2 font-bold">Lucro</th>
+                  <th className="py-1.5 px-2 font-bold">Margem</th>
+                  <th className="py-1.5 px-2 font-bold border-r border-[#0F5C3C]/20">Desc. Seguro</th>
+
+                  <th className="py-1.5 px-2 font-bold bg-[#FCE4EE]/40">Total</th>
+                  <th className="py-1.5 px-2 font-bold bg-[#FCE4EE]/40">Lucro</th>
+                  <th className="py-1.5 px-2 font-bold bg-[#FCE4EE]/40">Margem</th>
+                  <th className="py-1.5 px-2 font-bold bg-[#FCE4EE]/40">Desc. Seguro</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#0F5C3C]/10">
+                {faixasDesconto.map((faixa, idx) => {
+                  const qtdFaixa = Math.max(1, faixa.qtdMinima);
+                  const precoComDesc = precoComDesconto(produto.precoVenda, faixa.descontoPercent);
+                  const infoSem = calcularCustoPedido(resumo, qtdFaixa, precoComDesc, false);
+                  const infoPres = calcularCustoPedido(resumo, qtdFaixa, precoComDesc, true);
+                  const descMaxSem = descontoMaximoSeguro(resumo, qtdFaixa, false, margemMinima);
+                  const descMaxPres = descontoMaximoSeguro(resumo, qtdFaixa, true, margemMinima);
+                  const temCaixaAuto = qtdFaixa >= (resumo.qtdMinimaCaixaAutomatica ?? 5);
+
+                  return (
+                    <tr key={idx} className="hover:bg-[#FBF7F1]/60 transition-colors">
+                      {/* Qtd Inicial Editável */}
+                      <td className="py-2 px-3 border-r border-[#0F5C3C]/15">
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={faixa.qtdMinima}
+                            onChange={(e) =>
+                              handleAlterarFaixa(idx, 'qtdMinima', parseNumeroSeguro(e.target.value))
+                            }
+                            className="w-16 px-2 py-1 bg-white border border-[#0F5C3C]/30 rounded-lg text-xs font-bold text-center text-[#07402A] focus:ring-2 focus:ring-[#F59BC1] focus:outline-hidden"
+                          />
+                          <span className="text-[11px] font-sans font-medium text-[#07402A]/70">
+                            {qtdFaixa === 1 ? 'ímã' : 'ímãs'}
+                          </span>
+                          {temCaixaAuto && (
+                            <span className="text-[9px] font-bold bg-[#EAF5EF] text-[#0F5C3C] px-1.5 py-0.5 rounded-md border border-[#0F5C3C]/20" title={`Caixa incluída automaticamente a partir de ${resumo.qtdMinimaCaixaAutomatica} ímãs`}>
+                              Caixa auto
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Desconto % Editável */}
+                      <td className="py-2 px-2.5 border-r border-[#0F5C3C]/15">
+                        <div className="relative w-20">
+                          <input
+                            type="number"
+                            min="0"
+                            max="90"
+                            step="1"
+                            value={faixa.descontoPercent}
+                            onChange={(e) =>
+                              handleAlterarFaixa(
+                                idx,
+                                'descontoPercent',
+                                parseNumeroSeguro(e.target.value)
+                              )
+                            }
+                            className="w-full pl-2 pr-6 py-1 bg-white border border-[#0F5C3C]/30 rounded-lg text-xs font-bold text-center text-[#07402A] focus:ring-2 focus:ring-[#F59BC1] focus:outline-hidden"
+                          />
+                          <span className="absolute right-2 top-1.5 text-[10px] font-bold text-[#07402A]/60">
+                            %
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* Preço Unitário com Desconto */}
+                      <td className="py-2 px-2.5 font-bold text-[#07402A] border-r border-[#0F5C3C]/15">
+                        {formatBRLPreciso(precoComDesc)}
+                      </td>
+
+                      {/* Sem Presente: Total, Lucro, Margem (Semáforo), Desc. Seguro */}
+                      <td className="py-2 px-2 text-[#07402A]">
+                        {formatBRL(infoSem.faturamento)}
+                      </td>
+                      <td className="py-2 px-2 font-bold text-[#07402A]">
+                        {formatBRL(infoSem.lucroTotal)}
+                      </td>
+                      <td className="py-2 px-2">
+                        {renderSemaforo(infoSem.margemPercent)}
+                      </td>
+                      <td className="py-2 px-2 border-r border-[#0F5C3C]/20">
+                        <span className="text-[11px] font-bold text-[#0F5C3C] bg-[#EAF5EF] px-1.5 py-0.5 rounded-md">
+                          até {Math.floor(descMaxSem)}%
+                        </span>
+                      </td>
+
+                      {/* Presente: Total, Lucro, Margem (Semáforo), Desc. Seguro */}
+                      <td className="py-2 px-2 text-[#07402A] bg-[#FCE4EE]/20">
+                        {formatBRL(infoPres.faturamento)}
+                      </td>
+                      <td className="py-2 px-2 font-bold text-[#07402A] bg-[#FCE4EE]/20">
+                        {formatBRL(infoPres.lucroTotal)}
+                      </td>
+                      <td className="py-2 px-2 bg-[#FCE4EE]/20">
+                        {renderSemaforo(infoPres.margemPercent)}
+                      </td>
+                      <td className="py-2 px-2 bg-[#FCE4EE]/20">
+                        <span className="text-[11px] font-bold text-[#0F5C3C] bg-white px-1.5 py-0.5 rounded-md border border-[#0F5C3C]/20">
+                          até {Math.floor(descMaxPres)}%
+                        </span>
+                      </td>
+
+                      {/* Ação: Remover */}
+                      <td className="py-2 px-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoverFaixa(idx)}
+                          disabled={faixasDesconto.length <= 1}
+                          className="p-1 rounded-lg text-rose-600 hover:bg-rose-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                          title="Remover faixa"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <table className="w-full text-left text-xs font-mono-numbers border-collapse">
+              <thead>
+                <tr className="bg-[#FBF7F1] text-[#07402A] border-b border-[#0F5C3C]/15 text-[11px]">
+                  <th className="py-2.5 px-3 font-bold">Faixa (Qtd Mínima)</th>
+                  <th className="py-2.5 px-2.5 font-bold">Desconto (%)</th>
+                  <th className="py-2.5 px-2.5 font-bold">Preço Unitário c/ Desc.</th>
+                  <th className="py-2.5 px-2.5 font-bold">Total do Pedido</th>
+                  <th className="py-2.5 px-2.5 font-bold">Custo Insumos</th>
+                  <th className="py-2.5 px-2.5 font-bold">Lucro Líquido</th>
+                  <th className="py-2.5 px-2.5 font-bold">Margem de Lucro</th>
+                  <th className="py-2.5 px-2.5 font-bold">Desconto Máx Seguro</th>
+                  <th className="py-2.5 px-2 font-bold text-center">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#0F5C3C]/10">
+                {faixasDesconto.map((faixa, idx) => {
+                  const ehPres = modoVisualizacaoFaixas === 'presente';
+                  const qtdFaixa = Math.max(1, faixa.qtdMinima);
+                  const precoComDesc = precoComDesconto(produto.precoVenda, faixa.descontoPercent);
+                  const info = calcularCustoPedido(resumo, qtdFaixa, precoComDesc, ehPres);
+                  const descMax = descontoMaximoSeguro(resumo, qtdFaixa, ehPres, margemMinima);
+                  const temCaixaAuto = qtdFaixa >= (resumo.qtdMinimaCaixaAutomatica ?? 5);
+
+                  return (
+                    <tr key={idx} className="hover:bg-[#FBF7F1]/60 transition-colors">
+                      <td className="py-2 px-3">
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={faixa.qtdMinima}
+                            onChange={(e) =>
+                              handleAlterarFaixa(idx, 'qtdMinima', parseNumeroSeguro(e.target.value))
+                            }
+                            className="w-16 px-2 py-1 bg-white border border-[#0F5C3C]/30 rounded-lg text-xs font-bold text-center text-[#07402A] focus:ring-2 focus:ring-[#F59BC1] focus:outline-hidden"
+                          />
+                          <span className="text-[11px] font-sans font-medium text-[#07402A]/70">
+                            {qtdFaixa === 1 ? 'ímã' : 'ímãs'}
+                          </span>
+                          {temCaixaAuto && (
+                            <span className="text-[9px] font-bold bg-[#EAF5EF] text-[#0F5C3C] px-1.5 py-0.5 rounded-md border border-[#0F5C3C]/20">
+                              Caixa auto
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="py-2 px-2.5">
+                        <div className="relative w-20">
+                          <input
+                            type="number"
+                            min="0"
+                            max="90"
+                            step="1"
+                            value={faixa.descontoPercent}
+                            onChange={(e) =>
+                              handleAlterarFaixa(
+                                idx,
+                                'descontoPercent',
+                                parseNumeroSeguro(e.target.value)
+                              )
+                            }
+                            className="w-full pl-2 pr-6 py-1 bg-white border border-[#0F5C3C]/30 rounded-lg text-xs font-bold text-center text-[#07402A] focus:ring-2 focus:ring-[#F59BC1] focus:outline-hidden"
+                          />
+                          <span className="absolute right-2 top-1.5 text-[10px] font-bold text-[#07402A]/60">
+                            %
+                          </span>
+                        </div>
+                      </td>
+
+                      <td className="py-2 px-2.5 font-bold text-[#07402A]">
+                        {formatBRLPreciso(precoComDesc)}
+                      </td>
+
+                      <td className="py-2 px-2.5 text-[#07402A]">
+                        {formatBRL(info.faturamento)}
+                      </td>
+
+                      <td className="py-2 px-2.5 text-[#07402A]">
+                        {formatBRLPreciso(info.custoInsumos)}
+                      </td>
+
+                      <td className="py-2 px-2.5 font-bold text-[#07402A]">
+                        {formatBRL(info.lucroTotal)}
+                      </td>
+
+                      <td className="py-2 px-2.5">
+                        {renderSemaforo(info.margemPercent)}
+                      </td>
+
+                      <td className="py-2 px-2.5">
+                        <span className="text-[11px] font-bold text-[#0F5C3C] bg-[#EAF5EF] px-2 py-0.5 rounded-md">
+                          até {Math.floor(descMax)}%
+                        </span>
+                      </td>
+
+                      <td className="py-2 px-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoverFaixa(idx)}
+                          disabled={faixasDesconto.length <= 1}
+                          className="p-1 rounded-lg text-rose-600 hover:bg-rose-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                          title="Remover faixa"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Rodapé informativo de regras de desconto */}
+        <div className="p-3 bg-[#FBF7F1] rounded-2xl border border-[#0F5C3C]/10 text-[11px] text-[#07402A]/75 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <span>
+            💡 <strong>Padrão recomendado:</strong> 1 un → 0% · 5 un → 10% · 10 un → 15% · 25 un → 20%. A caixa é incluída automaticamente a partir de {resumo.qtdMinimaCaixaAutomatica} ímãs.
+          </span>
+          <span className="text-[10px] text-[#0F5C3C] font-semibold shrink-0">
+            Salvo automaticamente no seu dispositivo
+          </span>
         </div>
       </div>
 

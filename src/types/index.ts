@@ -31,6 +31,11 @@ export interface ItemFotoIma {
   parametroRegra?: number; // Ex: fotos por folha, ímãs por embalagem, etc.
 }
 
+export interface FaixaDesconto {
+  qtdMinima: number;
+  descontoPercent: number;
+}
+
 export interface ProdutoConfig {
   nome: string;
   itens: ItemFotoIma[];
@@ -39,6 +44,8 @@ export interface ProdutoConfig {
   custoEntregaPorUnidade: number; // Ex: R$ 0.00 ou frete/embalagem
   precoVenda: number; // Preço praticado em R$
   margemDesejada: number; // Ex: 50%
+  margemMinima?: number; // Padrão: 20%
+  faixasDesconto?: FaixaDesconto[]; // Padrão: 1->0%, 5->10%, 10->15%, 25->20%
   fotosPorFolha?: number; // Padrão: 8 fotos por folha
   imasPorEmbalagem?: number; // Padrão: 2 ímãs por embalagem holográfica
   imasPorCaixa?: number; // Padrão: undefined/0 (1 por pedido sem limite)

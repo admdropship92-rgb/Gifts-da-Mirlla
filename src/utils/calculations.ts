@@ -1,5 +1,6 @@
-import { Insumo, ProdutoConfig, RegraConsumo } from '../types';
+import { FaixaDesconto, Insumo, ProdutoConfig, RegraConsumo } from '../types';
 import { calcularCustoUnitarioInsumo } from './formatters';
+import { FAIXAS_DESCONTO_PADRAO } from './storage';
 
 export function isItemKitAntigo(
   insumo: { nome: string; id?: string; ativoNaReceita?: boolean } | string
@@ -97,6 +98,8 @@ export interface ResumoFinanceiro {
   markupPercent: number;
   estaNoLucro: boolean;
   precoSugerido: number;
+  margemMinima: number;
+  faixasDesconto: FaixaDesconto[];
 
   // Detalhamento para 1 unidade
   detalheInsumos: InsumoDetalheCalculado[];
@@ -360,6 +363,12 @@ export function calcularResumoFinanceiro(
     precoSugerido = custosDiretos * (1 + margemDesejada / 100);
   }
 
+  const margemMinima = produto.margemMinima ?? 20;
+  const faixasDesconto =
+    Array.isArray(produto.faixasDesconto) && produto.faixasDesconto.length > 0
+      ? produto.faixasDesconto
+      : FAIXAS_DESCONTO_PADRAO;
+
   return {
     custoInsumosTotal,
     custoPorImaReferencia: custoInsumosTotal,
@@ -383,7 +392,79 @@ export function calcularResumoFinanceiro(
     markupPercent,
     estaNoLucro,
     precoSugerido,
+    margemMinima,
+    faixasDesconto,
     detalheInsumos: detalheTemp,
     detalheParaGrafico,
   };
+}
+
+/**
+ * Calcula o preço unitário após aplicar um percentual de desconto.
+ */
+export function precoComDesconto(precoVenda: number, descontoPercent: number): number {
+  const p = Number(precoVenda) || 0;
+  const d = Math.max(0, Math.min(100, Number(descontoPercent) || 0));
+  return Math.max(0, p * (1 - d / 100));
+}
+
+/**
+ * Calcula o maior desconto percentual seguro para uma quantidade e regra de embalagem (presente/sem presente),
+ * de modo que a margem de lucro do pedido continue maior ou igual à margem mínima configurada.
+ */
+export function descontoMaximoSeguro(
+  resumo: ResumoFinanceiro,
+  quantidade: number,
+  ehPresente: boolean,
+  margemMinimaPersonalizada?: number
+): number {
+  const N = Math.max(1, Math.round(quantidade));
+  const margemMin =
+    margemMinimaPersonalizada !== undefined
+      ? margemMinimaPersonalizada
+      : resumo.margemMinima ?? 20;
+
+  const taxaTotal = resumo.taxaTotalPercent;
+  const divisor = 1 - (taxaTotal + margemMin) / 100;
+
+  // Se os impostos/taxas + margem mínima ultrapassarem 100% ou preço não for positivo, nenhum desconto é seguro
+  if (divisor <= 0.001 || resumo.precoVenda <= 0) {
+    return 0;
+  }
+
+  // Usa calcularCustoPedido existente para extrair o custo exato com as regras de embalagem e presente
+  const infoCusto = calcularCustoPedido(resumo, N, resumo.precoVenda, ehPresente);
+  const custosDiretos = infoCusto.custoInsumos + infoCusto.custoEntrega;
+
+  // Faturamento mínimo necessário para garantir a margem mínima:
+  // margem = (Faturamento - CustoDireto - Faturamento * taxa) / Faturamento = 1 - taxa - CustoDireto / Faturamento >= margemMin
+  // FaturamentoMin = CustoDireto / (1 - taxa - margemMin)
+  const faturamentoMinimo = custosDiretos / divisor;
+  const precoMinimoPorUnidade = faturamentoMinimo / N;
+
+  const descMaximo = (1 - precoMinimoPorUnidade / resumo.precoVenda) * 100;
+
+  if (descMaximo <= 0) return 0;
+  if (descMaximo > 100) return 100;
+  return descMaximo;
+}
+
+/**
+ * Obtém o percentual de desconto aplicável para uma determinada quantidade de ímãs,
+ * buscando na lista de faixas de desconto configurada.
+ */
+export function obterDescontoParaQuantidade(
+  faixas: FaixaDesconto[] | undefined,
+  quantidade: number
+): number {
+  if (!faixas || faixas.length === 0) return 0;
+  const N = Math.max(1, Math.round(quantidade));
+  const ordenadas = [...faixas].sort((a, b) => a.qtdMinima - b.qtdMinima);
+  let desconto = 0;
+  for (const f of ordenadas) {
+    if (N >= f.qtdMinima) {
+      desconto = f.descontoPercent;
+    }
+  }
+  return Math.max(0, Math.min(100, Number(desconto) || 0));
 }

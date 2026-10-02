@@ -1,6 +1,13 @@
-import { AppData, Insumo, ItemFotoIma, ProdutoConfig } from '../types';
+import { AppData, FaixaDesconto, Insumo, ItemFotoIma, ProdutoConfig } from '../types';
 
 export const STORAGE_KEY = 'foto_imas_dados_v3';
+
+export const FAIXAS_DESCONTO_PADRAO: FaixaDesconto[] = [
+  { qtdMinima: 1, descontoPercent: 0 },
+  { qtdMinima: 5, descontoPercent: 10 },
+  { qtdMinima: 10, descontoPercent: 15 },
+  { qtdMinima: 25, descontoPercent: 20 },
+];
 
 // 6 Novos insumos reais solicitados
 export const NOVOS_INSUMOS_REAIS: Insumo[] = [
@@ -230,6 +237,8 @@ export const DADOS_INICIAIS: AppData = {
     custoEntregaPorUnidade: 0,
     precoVenda: 18.00, // Preço praticado para 1 pedido / unidade de referência
     margemDesejada: 40,
+    margemMinima: 20,
+    faixasDesconto: FAIXAS_DESCONTO_PADRAO,
     fotosPorFolha: 8,
     imasPorEmbalagem: 2,
     qtdMinimaCaixaAutomatica: 5,
@@ -350,6 +359,11 @@ export function carregarDados(): AppData {
         custoEntregaPorUnidade: parsed.produto?.custoEntregaPorUnidade ?? 0,
         precoVenda: parsed.produto?.precoVenda || 18.00,
         margemDesejada: parsed.produto?.margemDesejada || 40,
+        margemMinima: parsed.produto?.margemMinima ?? 20,
+        faixasDesconto:
+          Array.isArray(parsed.produto?.faixasDesconto) && parsed.produto.faixasDesconto.length > 0
+            ? parsed.produto.faixasDesconto
+            : FAIXAS_DESCONTO_PADRAO,
         fotosPorFolha,
         imasPorEmbalagem: parsed.produto?.imasPorEmbalagem ?? 2,
         imasPorCaixa: parsed.produto?.imasPorCaixa,
