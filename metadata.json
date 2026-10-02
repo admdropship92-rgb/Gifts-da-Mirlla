@@ -1,0 +1,6 @@
+{
+  "name": "Foto Ímãs - Calculadora de Custos e Lucro",
+  "description": "Painel pessoal simples e prático para calcular custos de insumos (Shopee e Temu), composição do produto, precificação e simulação de lucro de foto ímãs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
